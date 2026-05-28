@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <chrono>
 #include "k12.h"
 
 /* -------------------------------------------------------------------------
@@ -11,6 +12,7 @@
 
 static int tests_run    = 0;
 static int tests_passed = 0;
+static std::chrono::steady_clock::duration total_k12_time{};
 
 static void print_hex(const char* label, const uint8_t* data, size_t len)
 {
@@ -22,7 +24,20 @@ static void print_hex(const char* label, const uint8_t* data, size_t len)
     printf("\n");
 }
 
+static void print_duration(const char* label, std::chrono::steady_clock::duration elapsed)
+{
+    const double us = std::chrono::duration<double, std::micro>(elapsed).count();
+    if (us < 1000.0) {
+        printf("  %s: %.3f us\n", label, us);
+    } else if (us < 1000000.0) {
+        printf("  %s: %.3f ms\n", label, us / 1000.0);
+    } else {
+        printf("  %s: %.3f s\n", label, us / 1000000.0);
+    }
+}
+
 static void check(const char* name,
+                  std::chrono::steady_clock::duration elapsed,
                   const uint8_t* got, const uint8_t* expected, size_t len)
 {
     tests_run++;
@@ -34,7 +49,17 @@ static void check(const char* name,
         print_hex("expected", expected, len);
         print_hex("got     ", got,      len);
     }
+    print_duration("k12 time", elapsed);
+    total_k12_time += elapsed;
 }
+
+#define RUN_K12_AND_CHECK(name, out, expected, outlen, ...) \
+    do { \
+        const auto t0 = std::chrono::steady_clock::now(); \
+        kangaroo_twelve(__VA_ARGS__); \
+        const auto elapsed = std::chrono::steady_clock::now() - t0; \
+        check(name, elapsed, out, expected, outlen); \
+    } while (0)
 
 /* -------------------------------------------------------------------------
  * Pattern generator: ptn(n) = 00 01 02 ... FA 00 01 ... (cycle of 251 bytes)
@@ -64,11 +89,11 @@ static void test_empty_32(void)
         0x06,0xFE,0x2C,0xE1,0xF0,0xEF,0x39,0xE5
     };
     uint8_t out[32];
-    kangaroo_twelve(NULL, 0, NULL, 0, out, 32);
-    check("K12(M='', C='', L=32)", out, expected, 32);
+    RUN_K12_AND_CHECK("K12(M='', C='', L=32)", out, expected, 32,
+                      NULL, 0, NULL, 0, out, 32);
 }
 
-/* KangarooTwelve(M=``, C=``, 64) — first 32 bytes must match the 32-byte vector */
+/* KangarooTwelve(M=``, C=``, 64) - first 32 bytes must match the 32-byte vector */
 static void test_empty_64(void)
 {
     const uint8_t expected[64] = {
@@ -82,11 +107,11 @@ static void test_empty_64(void)
         0xFF,0x38,0x50,0x81,0x39,0xEB,0x0A,0x71
     };
     uint8_t out[64];
-    kangaroo_twelve(NULL, 0, NULL, 0, out, 64);
-    check("K12(M='', C='', L=64)", out, expected, 64);
+    RUN_K12_AND_CHECK("K12(M='', C='', L=64)", out, expected, 64,
+                      NULL, 0, NULL, 0, out, 64);
 }
 
-/* KangarooTwelve(M=``, C=``, 10032) — last 32 bytes */
+/* KangarooTwelve(M=``, C=``, 10032) - last 32 bytes */
 static void test_empty_10032_last32(void)
 {
     const uint8_t expected[32] = {
@@ -96,8 +121,8 @@ static void test_empty_10032_last32(void)
         0x80,0x27,0x7A,0x1D,0x28,0xE2,0xFF,0x6D
     };
     uint8_t* out = (uint8_t*)malloc(10032);
-    kangaroo_twelve(NULL, 0, NULL, 0, out, 10032);
-    check("K12(M='', C='', L=10032) last 32B", out + 10032 - 32, expected, 32);
+    RUN_K12_AND_CHECK("K12(M='', C='', L=10032) last 32B", out + 10032 - 32, expected, 32,
+                      NULL, 0, NULL, 0, out, 10032);
     free(out);
 }
 
@@ -112,8 +137,8 @@ static void test_ptn1(void)
     };
     uint8_t* M = make_pattern(1);
     uint8_t out[32];
-    kangaroo_twelve(M, 1, NULL, 0, out, 32);
-    check("K12(M=ptn(1), C='', L=32)", out, expected, 32);
+    RUN_K12_AND_CHECK("K12(M=ptn(1), C='', L=32)", out, expected, 32,
+                      M, 1, NULL, 0, out, 32);
     free(M);
 }
 
@@ -128,8 +153,8 @@ static void test_ptn17(void)
     };
     uint8_t* M = make_pattern(17);
     uint8_t out[32];
-    kangaroo_twelve(M, 17, NULL, 0, out, 32);
-    check("K12(M=ptn(17), C='', L=32)", out, expected, 32);
+    RUN_K12_AND_CHECK("K12(M=ptn(17), C='', L=32)", out, expected, 32,
+                      M, 17, NULL, 0, out, 32);
     free(M);
 }
 
@@ -145,12 +170,12 @@ static void test_ptn17sq(void)
     size_t len = 17*17;
     uint8_t* M = make_pattern(len);
     uint8_t out[32];
-    kangaroo_twelve(M, len, NULL, 0, out, 32);
-    check("K12(M=ptn(17^2), C='', L=32)", out, expected, 32);
+    RUN_K12_AND_CHECK("K12(M=ptn(17^2), C='', L=32)", out, expected, 32,
+                      M, len, NULL, 0, out, 32);
     free(M);
 }
 
-/* KangarooTwelve(M=ptn(17^3), C=``, 32) — crosses the 8192 chunk boundary */
+/* KangarooTwelve(M=ptn(17^3), C=``, 32) - crosses the 8192 chunk boundary */
 static void test_ptn17cube(void)
 {
     const uint8_t expected[32] = {
@@ -159,15 +184,15 @@ static void test_ptn17cube(void)
         0x2C,0x12,0xE3,0x22,0xE4,0xEE,0x7F,0xE4,
         0x17,0xF9,0x2C,0x75,0x8F,0x0D,0x59,0xD0
     };
-    size_t len = 17*17*17; /* 4913 bytes — single block */
+    size_t len = 17*17*17; /* 4913 bytes - single block */
     uint8_t* M = make_pattern(len);
     uint8_t out[32];
-    kangaroo_twelve(M, len, NULL, 0, out, 32);
-    check("K12(M=ptn(17^3), C='', L=32)", out, expected, 32);
+    RUN_K12_AND_CHECK("K12(M=ptn(17^3), C='', L=32)", out, expected, 32,
+                      M, len, NULL, 0, out, 32);
     free(M);
 }
 
-/* KangarooTwelve(M=ptn(17^4), C=``, 32) — 83521 bytes, multi-block */
+/* KangarooTwelve(M=ptn(17^4), C=``, 32) - 83521 bytes, multi-block */
 static void test_ptn17_4(void)
 {
     const uint8_t expected[32] = {
@@ -179,8 +204,8 @@ static void test_ptn17_4(void)
     size_t len = 17UL*17*17*17; /* 83521 bytes */
     uint8_t* M = make_pattern(len);
     uint8_t out[32];
-    kangaroo_twelve(M, len, NULL, 0, out, 32);
-    check("K12(M=ptn(17^4), C='', L=32)", out, expected, 32);
+    RUN_K12_AND_CHECK("K12(M=ptn(17^4), C='', L=32)", out, expected, 32,
+                      M, len, NULL, 0, out, 32);
     free(M);
 }
 
@@ -196,8 +221,8 @@ static void test_ptn17_5(void)
     size_t len = 17UL*17*17*17*17; /* 1419857 bytes */
     uint8_t* M = make_pattern(len);
     uint8_t out[32];
-    kangaroo_twelve(M, len, NULL, 0, out, 32);
-    check("K12(M=ptn(17^5), C='', L=32)", out, expected, 32);
+    RUN_K12_AND_CHECK("K12(M=ptn(17^5), C='', L=32)", out, expected, 32,
+                      M, len, NULL, 0, out, 32);
     free(M);
 }
 
@@ -213,12 +238,12 @@ static void test_ptn17_6(void)
     size_t len = 17UL*17*17*17*17*17; /* 24137569 bytes */
     uint8_t* M = make_pattern(len);
     uint8_t out[32];
-    kangaroo_twelve(M, len, NULL, 0, out, 32);
-    check("K12(M=ptn(17^6), C='', L=32)", out, expected, 32);
+    RUN_K12_AND_CHECK("K12(M=ptn(17^6), C='', L=32)", out, expected, 32,
+                      M, len, NULL, 0, out, 32);
     free(M);
 }
 
-/* KangarooTwelve(M=``, C=ptn(1), 32) — customization string */
+/* KangarooTwelve(M=``, C=ptn(1), 32) - customization string */
 static void test_custom_1(void)
 {
     const uint8_t expected[32] = {
@@ -229,8 +254,8 @@ static void test_custom_1(void)
     };
     uint8_t* C = make_pattern(1);
     uint8_t out[32];
-    kangaroo_twelve(NULL, 0, C, 1, out, 32);
-    check("K12(M='', C=ptn(1), L=32)", out, expected, 32);
+    RUN_K12_AND_CHECK("K12(M='', C=ptn(1), L=32)", out, expected, 32,
+                      NULL, 0, C, 1, out, 32);
     free(C);
 }
 
@@ -246,8 +271,8 @@ static void test_custom_41(void)
     uint8_t M[1] = { 0xFF };
     uint8_t* C = make_pattern(41);
     uint8_t out[32];
-    kangaroo_twelve(M, 1, C, 41, out, 32);
-    check("K12(M=FF, C=ptn(41), L=32)", out, expected, 32);
+    RUN_K12_AND_CHECK("K12(M=FF, C=ptn(41), L=32)", out, expected, 32,
+                      M, 1, C, 41, out, 32);
     free(C);
 }
 
@@ -264,8 +289,8 @@ static void test_custom_41sq(void)
     size_t C_len = 41*41;
     uint8_t* C = make_pattern(C_len);
     uint8_t out[32];
-    kangaroo_twelve(M, 3, C, C_len, out, 32);
-    check("K12(M=FF*3, C=ptn(41^2), L=32)", out, expected, 32);
+    RUN_K12_AND_CHECK("K12(M=FF*3, C=ptn(41^2), L=32)", out, expected, 32,
+                      M, 3, C, C_len, out, 32);
     free(C);
 }
 
@@ -282,9 +307,26 @@ static void test_custom_41cube(void)
     size_t C_len = 41*41*41;
     uint8_t* C = make_pattern(C_len);
     uint8_t out[32];
-    kangaroo_twelve(M, 7, C, C_len, out, 32);
-    check("K12(M=FF*7, C=ptn(41^3), L=32)", out, expected, 32);
+    RUN_K12_AND_CHECK("K12(M=FF*7, C=ptn(41^3), L=32)", out, expected, 32,
+                      M, 7, C, C_len, out, 32);
     free(C);
+}
+
+/* Benchmark: KangarooTwelve(M=ptn(24KB), C=``, L=32) */
+static void test_benchmark_24kb(void)
+{
+    const size_t len = 24 * 1024;
+    uint8_t* M = make_pattern(len);
+    uint8_t out[32];
+
+    const auto t0 = std::chrono::steady_clock::now();
+    kangaroo_twelve(M, len, NULL, 0, out, 32);
+    const auto elapsed = std::chrono::steady_clock::now() - t0;
+
+    printf("[BENCH] K12(M=ptn(24KB), C='', L=32)\n");
+    print_duration("k12 time", elapsed);
+
+    free(M);
 }
 
 /* -------------------------------------------------------------------------
@@ -308,6 +350,12 @@ int main(void)
     test_custom_41();
     test_custom_41sq();
     test_custom_41cube();
+
+    printf("\n=== Timing (all %d test vectors) ===\n", tests_run);
+    print_duration("total ", total_k12_time);
+
+    printf("\n=== Benchmarks ===\n\n");
+    test_benchmark_24kb();
 
     printf("\n=== Results: %d / %d passed ===\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
