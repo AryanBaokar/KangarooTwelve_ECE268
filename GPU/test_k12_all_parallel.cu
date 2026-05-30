@@ -19,24 +19,6 @@
  *   ./test_k12_all_parallel
  */
 
-static void print_gpu_memory(const char* label)
-{
-    size_t free_b = 0, total_b = 0;
-    if (cudaMemGetInfo(&free_b, &total_b) == cudaSuccess) {
-        std::printf("  GPU memory (%s): %.2f MiB free / %.2f MiB total\n",
-                    label,
-                    free_b / (1024.0 * 1024.0),
-                    total_b / (1024.0 * 1024.0));
-    }
-}
-
-static bool cuda_ok(cudaError_t err, const char* what)
-{
-    if (err == cudaSuccess) return true;
-    std::printf("CUDA error at %s: %s\n", what, cudaGetErrorString(err));
-    return false;
-}
-
 /* Hex-dump bytes for failed vector comparison. */
 static void print_hex(const char* label, const uint8_t* data, size_t len)
 {
@@ -188,9 +170,6 @@ static std::vector<TestCase> build_all_test_cases()
 
 int main(void)
 {
-    cudaSetDevice(0);
-    cudaGetLastError(); /* clear stale errors from prior runs */
-
     cudaDeviceProp prop{};
     if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
         std::printf("=== KangarooTwelve parallel batch test (device: %s, CC %d.%d) ===\n\n",
@@ -226,25 +205,14 @@ int main(void)
                 total_msg / (1024.0 * 1024.0),
                 total_cust / 1024.0,
                 total_out / 1024.0);
-    print_gpu_memory("before upload");
 
     K12GpuBatch batch;
 
     const auto upload_t0 = std::chrono::steady_clock::now();
-    const bool upload_ok = batch.upload(messages.data(), message_lengths.data(),
-                                      customs.data(), custom_lengths.data(),
-                                      output_lengths.data(), n);
+    batch.upload(messages.data(), message_lengths.data(),
+                 customs.data(), custom_lengths.data(),
+                 output_lengths.data(), n);
     const auto upload_time = std::chrono::steady_clock::now() - upload_t0;
-
-    print_gpu_memory("after upload");
-
-    if (!upload_ok) {
-        std::printf("batch.upload failed (see stderr for which cudaMalloc/memcpy failed).\n");
-        print_gpu_memory("after failed upload");
-        std::printf("If GPU memory looks fine, rebuild with -arch=sm_61 for GTX 1080 Ti.\n");
-        return 1;
-    }
-    std::printf("Device output buffer: %zu bytes\n", batch.total_output_bytes());
 
     std::printf("Launching %zu blocks (1 block per test vector, %u threads/block)\n",
                 n, static_cast<unsigned>(K12_GPU_BLOCK_THREADS));
@@ -253,24 +221,12 @@ int main(void)
     k12_gpu_hash_batch(batch);
     const auto hash_time = std::chrono::steady_clock::now() - hash_t0;
 
-    if (!cuda_ok(cudaGetLastError(), "after k12_gpu_hash_batch")) {
-        std::printf("Kernel likely failed; cudaMemcpy often reports 'unknown error' here.\n");
-        std::printf("Rebuild with: nvcc -std=c++17 -O2 -arch=sm_61 k12_gpu.cu test_k12_all_parallel.cu -o test_k12_all_parallel\n");
-        std::printf("(GTX 1080 Ti = compute 6.1; optional if default JIT fails on your setup.)\n");
-        return 1;
-    }
-    print_gpu_memory("after hash");
-
     std::vector<uint8_t> host_out(batch.total_output_bytes());
 
     const auto copy_t0 = std::chrono::steady_clock::now();
-    const cudaError_t err = cudaMemcpy(host_out.data(), batch.device_output(),
-                                       batch.total_output_bytes(), cudaMemcpyDeviceToHost);
+    cudaMemcpy(host_out.data(), batch.device_output(),
+               batch.total_output_bytes(), cudaMemcpyDeviceToHost);
     const auto download_time = std::chrono::steady_clock::now() - copy_t0;
-
-    if (!cuda_ok(err, "cudaMemcpy(device_output -> host)")) {
-        return 1;
-    }
 
     std::printf("\n=== Timing (all %zu hashes in one kernel launch) ===\n", n);
     gpu_print_duration("upload", upload_time);

@@ -3,52 +3,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
-#include <cstdio>
 #include <cstring>
-
-/* Compile with -DK12_CUDA_TRACE=1 to print CUDA errors from hash to stderr. */
-#ifndef K12_CUDA_TRACE
-#define K12_CUDA_TRACE 0
-#endif
-
-#if K12_CUDA_TRACE
-#define K12_CUDA_CHECK(call) \
-    do { \
-        cudaError_t k12_err = (call); \
-        if (k12_err != cudaSuccess) { \
-            std::fprintf(stderr, "CUDA error: %s\n", cudaGetErrorString(k12_err)); \
-        } \
-    } while (0)
-#else
-#define K12_CUDA_CHECK(call) (call)
-#endif
-
-static bool k12_cuda_malloc(void** ptr, size_t nbytes, const char* label)
-{
-    if (nbytes == 0) {
-        *ptr = nullptr;
-        return true;
-    }
-    const cudaError_t err = cudaMalloc(ptr, nbytes);
-    if (err != cudaSuccess) {
-        std::fprintf(stderr, "cudaMalloc(%s, %zu bytes): %s\n",
-                     label, nbytes, cudaGetErrorString(err));
-        return false;
-    }
-    return true;
-}
-
-static bool k12_cuda_memcpy_h2d(void* dst, const void* src, size_t nbytes, const char* label)
-{
-    if (nbytes == 0) return true;
-    const cudaError_t err = cudaMemcpy(dst, src, nbytes, cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        std::fprintf(stderr, "cudaMemcpy H2D(%s, %zu bytes): %s\n",
-                     label, nbytes, cudaGetErrorString(err));
-        return false;
-    }
-    return true;
-}
 
 #define K12_GPU_DOMAIN_LEAF    0x0Bu
 #define K12_GPU_DOMAIN_ROOT    0x06u
@@ -77,12 +32,12 @@ size_t max_leaves_for_jobs(const size_t* message_lengths,
 
 } /* anonymous namespace */
 
-bool K12GpuItemBatch::upload(const uint8_t* const* items,
+void K12GpuItemBatch::upload(const uint8_t* const* items,
                              const size_t* lengths,
                              size_t count)
 {
     free();
-    if (count == 0) return true;
+    if (count == 0) return;
 
     std::vector<size_t> offsets(count);
     size_t total_bytes = 0;
@@ -91,30 +46,13 @@ bool K12GpuItemBatch::upload(const uint8_t* const* items,
         total_bytes += lengths[i];
     }
 
-    if (total_bytes > 0 && !k12_cuda_malloc(reinterpret_cast<void**>(&d_data_),
-                                             total_bytes, "item data")) {
-        free();
-        return false;
+    if (total_bytes > 0) {
+        cudaMalloc(&d_data_, total_bytes);
     }
-    if (!k12_cuda_malloc(reinterpret_cast<void**>(&d_offsets_),
-                         count * sizeof(size_t), "item offsets")) {
-        free();
-        return false;
-    }
-    if (!k12_cuda_malloc(reinterpret_cast<void**>(&d_lengths_),
-                         count * sizeof(size_t), "item lengths")) {
-        free();
-        return false;
-    }
-    if (!k12_cuda_memcpy_h2d(d_offsets_, offsets.data(), count * sizeof(size_t),
-                             "item offsets")) {
-        free();
-        return false;
-    }
-    if (!k12_cuda_memcpy_h2d(d_lengths_, lengths, count * sizeof(size_t), "item lengths")) {
-        free();
-        return false;
-    }
+    cudaMalloc(&d_offsets_, count * sizeof(size_t));
+    cudaMalloc(&d_lengths_, count * sizeof(size_t));
+    cudaMemcpy(d_offsets_, offsets.data(), count * sizeof(size_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_lengths_, lengths, count * sizeof(size_t), cudaMemcpyHostToDevice);
 
     if (total_bytes > 0) {
         std::vector<uint8_t> staging(total_bytes);
@@ -122,14 +60,10 @@ bool K12GpuItemBatch::upload(const uint8_t* const* items,
             if (lengths[i] == 0) continue;
             std::memcpy(staging.data() + offsets[i], items[i], lengths[i]);
         }
-        if (!k12_cuda_memcpy_h2d(d_data_, staging.data(), total_bytes, "item data")) {
-            free();
-            return false;
-        }
+        cudaMemcpy(d_data_, staging.data(), total_bytes, cudaMemcpyHostToDevice);
     }
 
     count_ = count;
-    return true;
 }
 
 void K12GpuItemBatch::free()
@@ -143,7 +77,7 @@ void K12GpuItemBatch::free()
     count_ = 0;
 }
 
-bool K12GpuBatch::upload(const uint8_t* const* messages,
+void K12GpuBatch::upload(const uint8_t* const* messages,
                          const size_t* message_lengths,
                          const uint8_t* const* custom,
                          const size_t* custom_lengths,
@@ -151,16 +85,10 @@ bool K12GpuBatch::upload(const uint8_t* const* messages,
                          size_t count)
 {
     free();
-    if (count == 0) return true;
+    if (count == 0) return;
 
-    if (!messages_.upload(messages, message_lengths, count)) {
-        free();
-        return false;
-    }
-    if (!customizations_.upload(custom, custom_lengths, count)) {
-        free();
-        return false;
-    }
+    messages_.upload(messages, message_lengths, count);
+    customizations_.upload(custom, custom_lengths, count);
 
     output_offsets_.resize(count);
     size_t out_off = 0;
@@ -172,54 +100,29 @@ bool K12GpuBatch::upload(const uint8_t* const* messages,
     total_output_bytes_ = out_off;
     max_leaves_per_job_ = max_leaves_for_jobs(message_lengths, custom_lengths, count);
 
-    if (!k12_cuda_malloc(reinterpret_cast<void**>(&d_output_),
-                         total_output_bytes_, "batch output")) {
-        free();
-        return false;
-    }
-    if (!k12_cuda_malloc(reinterpret_cast<void**>(&d_output_offsets_),
-                         count * sizeof(size_t), "batch output offsets")) {
-        free();
-        return false;
-    }
-    if (!k12_cuda_malloc(reinterpret_cast<void**>(&d_output_lengths_),
-                         count * sizeof(size_t), "batch output lengths")) {
-        free();
-        return false;
-    }
-    if (!k12_cuda_memcpy_h2d(d_output_offsets_, output_offsets_.data(),
-                             count * sizeof(size_t), "batch output offsets")) {
-        free();
-        return false;
-    }
-    if (!k12_cuda_memcpy_h2d(d_output_lengths_, output_lengths,
-                             count * sizeof(size_t), "batch output lengths")) {
-        free();
-        return false;
-    }
+    cudaMalloc(&d_output_, total_output_bytes_);
+    cudaMalloc(&d_output_offsets_, count * sizeof(size_t));
+    cudaMalloc(&d_output_lengths_, count * sizeof(size_t));
+    cudaMemcpy(d_output_offsets_, output_offsets_.data(),
+               count * sizeof(size_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_output_lengths_, output_lengths,
+               count * sizeof(size_t), cudaMemcpyHostToDevice);
 
     if (max_leaves_per_job_ > 0) {
-        const size_t leaf_bytes = count * max_leaves_per_job_ * K12_GPU_CV_LEN;
-        if (!k12_cuda_malloc(reinterpret_cast<void**>(&d_leaf_cvs_), leaf_bytes,
-                             "batch leaf CVs")) {
-            free();
-            return false;
-        }
+        cudaMalloc(&d_leaf_cvs_, count * max_leaves_per_job_ * K12_GPU_CV_LEN);
     }
-
-    return true;
 }
 
-bool K12GpuBatch::upload(const uint8_t* const* messages,
+void K12GpuBatch::upload(const uint8_t* const* messages,
                          const size_t* message_lengths,
                          const uint8_t* const* custom,
                          const size_t* custom_lengths,
                          size_t count,
                          size_t output_len)
 {
-    if (count == 0) return true;
+    if (count == 0) return;
     std::vector<size_t> lens(count, output_len);
-    return upload(messages, message_lengths, custom, custom_lengths, lens.data(), count);
+    upload(messages, message_lengths, custom, custom_lengths, lens.data(), count);
 }
 
 void K12GpuBatch::free()
@@ -559,6 +462,5 @@ void k12_gpu_hash_batch(const K12GpuBatch& batch)
         jobs,
         batch.d_leaf_cvs_,
         batch.max_leaves_per_job_);
-    K12_CUDA_CHECK(cudaGetLastError());
-    K12_CUDA_CHECK(cudaDeviceSynchronize());
+    cudaDeviceSynchronize();
 }

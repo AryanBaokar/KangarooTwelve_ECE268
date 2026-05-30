@@ -25,7 +25,7 @@ public:
     ~K12GpuItemBatch() { free(); }
     K12GpuItemBatch(const K12GpuItemBatch&) = delete;
     K12GpuItemBatch& operator=(const K12GpuItemBatch&) = delete;
-    bool upload(const uint8_t* const* items, const size_t* lengths, size_t count);
+    void upload(const uint8_t* const* items, const size_t* lengths, size_t count);
     void free();
 
     size_t count() const { return count_; }
@@ -46,14 +46,14 @@ public:
     ~K12GpuBatch() { free(); }
     K12GpuBatch(const K12GpuBatch&) = delete;
     K12GpuBatch& operator=(const K12GpuBatch&) = delete;
-    bool upload(const uint8_t* const* messages,
+    void upload(const uint8_t* const* messages,
                 const size_t* message_lengths,
                 const uint8_t* const* custom,
                 const size_t* custom_lengths,
                 const size_t* output_lengths,
                 size_t count);
 
-    bool upload(const uint8_t* const* messages,
+    void upload(const uint8_t* const* messages,
                 const size_t* message_lengths,
                 const uint8_t* const* custom,
                 const size_t* custom_lengths,
