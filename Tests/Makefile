@@ -20,20 +20,22 @@ endif
 
 all: bench_cpu bench_gpu test_k12_all_parallel
 
-# --- GPU RFC vector test ---
-test_k12_all_parallel: $(GPU_DIR)/k12_gpu.cu $(GPU_DIR)/test_k12_all_parallel.cu $(GPU_DIR)/k12_gpu.h
+# GPU RFC vector test
+test_k12_all_parallel: $(GPU_DIR)/k12_gpu.cu $(GPU_DIR)/keccak_turboshake_gpu.cuh \
+		$(GPU_DIR)/test_k12_all_parallel.cu $(GPU_DIR)/k12_gpu.h
 	$(NVCC) $(NVCCFLAGS) $(GPU_DIR)/k12_gpu.cu $(GPU_DIR)/test_k12_all_parallel.cu -o $@
 
 test-vectors: test_k12_all_parallel
 	./test_k12_all_parallel
 
-# --- Timing benchmarks ---
+# Timing benchmarks
 bench_cpu: bench_cpu.cpp bench_common.h
 	$(CXX) $(CXXFLAGS) bench_cpu.cpp \
 		$(CPU_DIR)/keccak_p.cpp $(CPU_DIR)/turboshake128.cpp $(CPU_DIR)/k12.cpp \
 		-o $@
 
-bench_gpu: bench_gpu.cu bench_common.h $(GPU_DIR)/k12_gpu.cu $(GPU_DIR)/k12_gpu.h
+bench_gpu: bench_gpu.cu bench_common.h $(GPU_DIR)/k12_gpu.cu $(GPU_DIR)/keccak_turboshake_gpu.cuh \
+		$(GPU_DIR)/k12_gpu.h
 	$(NVCC) $(NVCCFLAGS) bench_gpu.cu $(GPU_DIR)/k12_gpu.cu -o $@
 
 compare: bench_cpu bench_gpu

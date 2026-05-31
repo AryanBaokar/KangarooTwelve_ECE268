@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-/* KangarooTwelve GPU batch hasher — 1 CUDA block per message, 128 threads/block.
+/* KangarooTwelve GPU batch hasher - 1 CUDA block per message, 128 threads/block.
  *
  * Build: nvcc -std=c++17 -O2 k12_gpu.cu your_test.cu -o your_test */
 
@@ -13,18 +13,22 @@
 #define K12_GPU_BLOCK_THREADS 128u
 #define K12_GPU_BLOCKS_PER_SM 1u
 
+/* Number of leaf CV slots for a serialized input of length S_len. */
 inline size_t k12_gpu_leaf_count(size_t S_len)
 {
     const size_t chunks = (S_len + K12_GPU_CHUNK_SIZE - 1) / K12_GPU_CHUNK_SIZE;
     return (chunks > 0) ? (chunks - 1u) : 0u;
 }
 
+/* Packed device buffers for a list of variable-length byte blobs. */
 class K12GpuItemBatch {
 public:
     K12GpuItemBatch() = default;
     ~K12GpuItemBatch() { free(); }
     K12GpuItemBatch(const K12GpuItemBatch&) = delete;
     K12GpuItemBatch& operator=(const K12GpuItemBatch&) = delete;
+
+    /* Concatenate items on the host and copy offsets/lengths/data to the GPU. */
     void upload(const uint8_t* const* items, const size_t* lengths, size_t count);
     void free();
 
@@ -40,12 +44,14 @@ private:
     size_t   count_ = 0;
 };
 
+/* One KangarooTwelve job per batch entry (message, customization, output length). */
 class K12GpuBatch {
 public:
     K12GpuBatch() = default;
     ~K12GpuBatch() { free(); }
     K12GpuBatch(const K12GpuBatch&) = delete;
     K12GpuBatch& operator=(const K12GpuBatch&) = delete;
+
     void upload(const uint8_t* const* messages,
                 const size_t* message_lengths,
                 const uint8_t* const* custom,
@@ -53,6 +59,7 @@ public:
                 const size_t* output_lengths,
                 size_t count);
 
+    /* Same as above when every job requests the same digest length. */
     void upload(const uint8_t* const* messages,
                 const size_t* message_lengths,
                 const uint8_t* const* custom,
@@ -80,4 +87,5 @@ private:
     size_t max_leaves_per_job_ = 0;
 };
 
+/* Launch one K12 kernel block per uploaded job and wait for completion. */
 void k12_gpu_hash_batch(const K12GpuBatch& batch);

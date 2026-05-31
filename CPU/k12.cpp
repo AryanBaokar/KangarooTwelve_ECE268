@@ -4,7 +4,7 @@
 #include <stdlib.h>
 
 /**
- * KangarooTwelve implementation — RFC 9861
+ * KangarooTwelve implementation  -  RFC 9861
  *
  * Tree structure ("leaves stapled to a pole"):
  *
@@ -89,7 +89,7 @@ static size_t length_encode(uint64_t x, uint8_t buf[9])
 
 
 /* -------------------------------------------------------------------------
- * leaf_hash — compute CV_i = F( chunk || 0x0B, 32 )
+ * leaf_hash  -  compute CV_i = F( chunk || 0x0B, 32 )
  *
  * Hashes exactly `len` bytes from `chunk` into the 32-byte chaining value
  * stored at `cv_out` using the leaf domain byte 0x0B.
@@ -105,7 +105,7 @@ static void leaf_hash(const uint8_t* chunk, size_t len, uint8_t cv_out[CV_LEN])
 
 
 /* -------------------------------------------------------------------------
- * kangaroo_twelve — top-level entry point
+ * kangaroo_twelve  -  top-level entry point
  *
  * Builds S = M || C || length_encode(|C|), determines single vs multi-block
  * path, hashes accordingly, and writes L bytes to `output`.

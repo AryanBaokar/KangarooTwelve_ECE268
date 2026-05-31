@@ -1,18 +1,18 @@
 #include "keccak_p.h"
 
 /**
- * Keccak-p[1600, 12] permutation — implementation.
+ * Keccak-p[1600, 12] permutation  -  implementation.
  *
  * Keccak-p[1600, 12] is the permutation Keccak-f[1600] restricted to its
  * last 12 rounds (rounds 12 through 23 in the full 24-round schedule).
  * It operates on a 1600-bit state organised as a 5x5 array of 64-bit lanes.
  *
  * Each of the 12 rounds applies five step mappings in sequence:
- *   Theta — linear diffusion across columns
- *   Rho   — intra-lane bit rotation
- *   Pi    — inter-lane transposition
- *   Chi   — non-linear row mixing (the only non-linear step)
- *   Iota  — round constant injection to break symmetry
+ *   Theta  -  linear diffusion across columns
+ *   Rho    -  intra-lane bit rotation
+ *   Pi     -  inter-lane transposition
+ *   Chi    -  non-linear row mixing (the only non-linear step)
+ *   Iota   -  round constant injection to break symmetry
  *
  * State layout:
  *   The spec defines the state as A[x][y][z] with x,y in {0..4} and z in
@@ -26,7 +26,7 @@
 #define K12_ROUNDS 12
 
 /* -------------------------------------------------------------------------
- * rot64 — 64-bit left rotation
+ * rot64  -  64-bit left rotation
  *
  * Rotates the bits of x left by n positions. Used by the Rho step to
  * shift each lane by its pre-computed offset. Implemented as a pair of
@@ -43,7 +43,7 @@ static inline uint64_t rot64(uint64_t x, int n)
  ***************************************************************/
 
 /**
- * RHO_OFFSETS — per-lane left rotation amounts for the Rho step.
+ * RHO_OFFSETS  -  per-lane left rotation amounts for the Rho step.
  *
  * The Rho step rotates lane A[x,y] left by RHO_OFFSETS[y][x] bits.
  * Lane A[0,0] has offset 0 and is never rotated.
@@ -64,7 +64,7 @@ static inline uint64_t rot64(uint64_t x, int n)
 };
 
 /**
- * ROUND_CONSTANTS — Iota step round constants for rounds 12 through 23.
+ * ROUND_CONSTANTS  -  Iota step round constants for rounds 12 through 23.
  *
  * The Iota step XORs a round-specific constant into lane A[0,0] to break
  * the symmetry that would otherwise make every round identical. Without
@@ -94,7 +94,7 @@ static constexpr uint64_t ROUND_CONSTANTS[K12_ROUNDS] = {
 };
 
 /* -------------------------------------------------------------------------
- * keccak_p — the permutation
+ * keccak_p  -  the permutation
  *
  * Applies 12 rounds of the Keccak round function to the 1600-bit state.
  * Each round consists of the five step mappings described below.
@@ -105,7 +105,7 @@ void keccak_p(uint64_t state[25])
     for(int rnd = 0; rnd < K12_ROUNDS; ++rnd)
     {
         /* -----------------------------------------------------------------
-         * Step 1: Theta — column parity diffusion
+         * Step 1: Theta  -  column parity diffusion
          *
          * Theta provides diffusion by mixing each lane with the parity of
          * two entire columns of the state. Without Theta, changing one
@@ -129,7 +129,7 @@ void keccak_p(uint64_t state[25])
         uint64_t C[5];
         uint64_t D[5];
 
-        /* Compute column parities — C[x] = XOR of all lanes in column x */
+        /* Compute column parities  -  C[x] = XOR of all lanes in column x */
         for (int x = 0; x < 5; ++x) {
             C[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
         }
@@ -147,7 +147,7 @@ void keccak_p(uint64_t state[25])
         }
 
         /* -----------------------------------------------------------------
-         * Steps 2 & 3: Rho and Pi — combined in one pass
+         * Steps 2 & 3: Rho and Pi  -  combined in one pass
          *
          * Rho rotates the bits within each lane by a fixed, lane-specific
          * offset. This provides intra-lane diffusion: a bit at position z
@@ -182,7 +182,7 @@ void keccak_p(uint64_t state[25])
         }
 
         /* -----------------------------------------------------------------
-         * Step 4: Chi — non-linear row mixing
+         * Step 4: Chi  -  non-linear row mixing
          *
          * Chi is the only non-linear step and is the source of Keccak's
          * resistance to linear cryptanalysis. It operates independently on
@@ -211,7 +211,7 @@ void keccak_p(uint64_t state[25])
         }
 
         /* -----------------------------------------------------------------
-         * Step 5: Iota — round constant injection
+         * Step 5: Iota  -  round constant injection
          *
          * Iota XORs a round-specific constant into lane A[0,0] (the single
          * lane at position state[0]). All other lanes are unchanged.

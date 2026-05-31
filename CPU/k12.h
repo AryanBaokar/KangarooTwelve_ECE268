@@ -3,7 +3,7 @@
 #include <stddef.h>
 
 /**
- * KangarooTwelve (K12) — RFC 9861 / draft-irtf-cfrg-kangarootwelve
+ * KangarooTwelve (K12)  -  RFC 9861 / draft-irtf-cfrg-kangarootwelve
  *
  * An eXtendable Output Function (XOF) built on TurboSHAKE128 and a
  * "leaves stapled to a pole" Sakura-compatible tree hash mode.

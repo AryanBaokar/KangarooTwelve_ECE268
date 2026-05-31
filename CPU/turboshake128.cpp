@@ -73,7 +73,7 @@ void turboshake128_absorb(TurboSponge* s, const uint8_t* data, size_t len) {
         }
         offset += take;
 
-        /* Full block absorbed — permute and reset position */
+        /* Full block absorbed  -  permute and reset position */
         if (s->position == RATE) {
             keccak_p(s->state);
             s->position = 0;
@@ -134,7 +134,7 @@ void turboshake128_squeeze(TurboSponge* s, uint8_t* out, size_t len) {
     size_t offset = 0;
 
     while (offset < len) {
-        /* Rate window exhausted — permute to generate next output block */
+        /* Rate window exhausted  -  permute to generate next output block */
         if (s->position == RATE) {
             keccak_p(s->state);
             s->position = 0;

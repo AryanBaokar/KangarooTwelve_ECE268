@@ -1,16 +1,15 @@
 #include "k12_gpu.h"
+#include "keccak_turboshake_gpu.cuh"
 
 #include <cuda_runtime.h>
 
 #include <algorithm>
 #include <cstring>
 
-#define K12_GPU_DOMAIN_LEAF    0x0Bu
-#define K12_GPU_DOMAIN_ROOT    0x06u
+#define K12_GPU_DOMAIN_LEAF      0x0Bu
+#define K12_GPU_DOMAIN_ROOT      0x06u
 #define K12_GPU_DOMAIN_SINGLE    0x07u
 #define K12_GPU_HOP_MARKER_0     0x03u
-#define K12_GPU_KECCAK_ROUNDS    12
-#define K12_GPU_TURBOSHAKE_RATE  168
 
 /* =============================================================================
  * Host
@@ -18,6 +17,7 @@
 
 namespace {
 
+/* Largest leaf count across all jobs in a batch (sizes intermediate CV buffer). */
 size_t max_leaves_for_jobs(const size_t* message_lengths,
                            const size_t* custom_lengths,
                            size_t count)
@@ -138,160 +138,10 @@ void K12GpuBatch::free()
 }
 
 /* =============================================================================
- * Device: TurboSHAKE128 + Keccak-p[1600,12]  (matches CPU/keccak_p.cpp)
+ * Device: KangarooTwelve (1 block = 1 message, blockIdx.x = job index)
  * ============================================================================= */
 
-__device__ __constant__ int k12_d_rho[5][5] = {
-    { 0, 1, 62, 28, 27},
-    {36, 44,  6, 55, 20},
-    { 3, 10, 43, 25, 39},
-    {41, 45, 15, 21,  8},
-    {18,  2, 61, 56, 14}
-};
-
-__device__ __constant__ uint64_t k12_d_rc[12] = {
-    0x000000008000808BULL, 0x800000000000008BULL, 0x8000000000008089ULL,
-    0x8000000000008003ULL, 0x8000000000008002ULL, 0x8000000000000080ULL,
-    0x000000000000800AULL, 0x800000008000000AULL, 0x8000000080008081ULL,
-    0x8000000000008080ULL, 0x0000000080000001ULL, 0x8000000080008008ULL
-};
-
-__device__ __forceinline__ uint64_t k12_gpu_rot64(uint64_t x, int n)
-{
-    n &= 63;
-    return (x << n) | (x >> (64 - n));
-}
-
-__device__ void k12_gpu_keccak_p(uint64_t state[25])
-{
-    for (int rnd = 0; rnd < K12_GPU_KECCAK_ROUNDS; ++rnd) {
-        uint64_t C[5];
-        uint64_t D[5];
-
-        for (int x = 0; x < 5; ++x) {
-            C[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
-        }
-        for (int x = 0; x < 5; ++x) {
-            D[x] = C[(x + 4) % 5] ^ k12_gpu_rot64(C[(x + 1) % 5], 1);
-        }
-        for (int y = 0; y < 5; ++y) {
-            for (int x = 0; x < 5; ++x) {
-                state[x + 5 * y] ^= D[x];
-            }
-        }
-
-        uint64_t next_state[25];
-        for (int y = 0; y < 5; ++y) {
-            for (int x = 0; x < 5; ++x) {
-                const int x_old = (x + 3 * y) % 5;
-                const int y_old = x;
-                const int shift = k12_d_rho[y_old][x_old];
-                next_state[x + 5 * y] = k12_gpu_rot64(state[x_old + 5 * y_old], shift);
-            }
-        }
-
-        for (int y = 0; y < 5; ++y) {
-            uint64_t T[5];
-            for (int x = 0; x < 5; ++x) {
-                T[x] = next_state[x + 5 * y];
-            }
-            for (int x = 0; x < 5; ++x) {
-                state[x + 5 * y] = T[x] ^ ((~T[(x + 1) % 5]) & T[(x + 2) % 5]);
-            }
-        }
-
-        state[0] ^= k12_d_rc[rnd];
-    }
-}
-
-struct K12GpuTurboSponge {
-    uint64_t state[25];
-    size_t   position;
-};
-
-__device__ inline void k12_gpu_ts_init(K12GpuTurboSponge* s)
-{
-    for (int i = 0; i < 25; ++i) s->state[i] = 0;
-    s->position = 0;
-}
-
-/* XOR len bytes into the rate window; permute when full.
- * Uses uint64 XOR when state position and data pointer are 8-byte aligned. */
-__device__ inline void k12_gpu_ts_absorb(K12GpuTurboSponge* s,
-                                         const uint8_t* data,
-                                         size_t len)
-{
-    uint8_t* sb = reinterpret_cast<uint8_t*>(s->state);
-    size_t off = 0;
-
-    while (off < len) {
-        if (s->position == K12_GPU_TURBOSHAKE_RATE) {
-            k12_gpu_keccak_p(s->state);
-            s->position = 0;
-        }
-
-        size_t space = K12_GPU_TURBOSHAKE_RATE - s->position;
-        size_t take = len - off;
-        if (take > space) {
-            take = space;
-        }
-
-        const uintptr_t data_addr = reinterpret_cast<uintptr_t>(data + off);
-        if (s->position % 8 == 0 && (data_addr % 8) == 0 && take >= 8) {
-            const size_t qtake = take & ~size_t(7);
-            uint64_t* st8 = reinterpret_cast<uint64_t*>(sb + s->position);
-            const uint64_t* in8 = reinterpret_cast<const uint64_t*>(data + off);
-            const size_t nq = qtake / 8;
-            for (size_t q = 0; q < nq; ++q) {
-                st8[q] ^= in8[q];
-            }
-            s->position += qtake;
-            off += qtake;
-            take -= qtake;
-        }
-
-        for (size_t i = 0; i < take; ++i) {
-            sb[s->position++] ^= data[off++];
-        }
-
-        if (s->position == K12_GPU_TURBOSHAKE_RATE) {
-            k12_gpu_keccak_p(s->state);
-            s->position = 0;
-        }
-    }
-}
-
-__device__ inline void k12_gpu_ts_pad(K12GpuTurboSponge* s, uint8_t domain)
-{
-    uint8_t* sb = reinterpret_cast<uint8_t*>(s->state);
-    sb[s->position] ^= domain;
-    sb[K12_GPU_TURBOSHAKE_RATE - 1] ^= 0x80u;
-    k12_gpu_keccak_p(s->state);
-    s->position = 0;
-}
-
-__device__ inline void k12_gpu_ts_squeeze(K12GpuTurboSponge* s, uint8_t* out, size_t len)
-{
-    uint8_t* sb = reinterpret_cast<uint8_t*>(s->state);
-    size_t off = 0;
-    while (off < len) {
-        if (s->position == K12_GPU_TURBOSHAKE_RATE) {
-            k12_gpu_keccak_p(s->state);
-            s->position = 0;
-        }
-        size_t take = len - off;
-        if (take > K12_GPU_TURBOSHAKE_RATE - s->position) {
-            take = K12_GPU_TURBOSHAKE_RATE - s->position;
-        }
-        for (size_t i = 0; i < take; ++i) out[off + i] = sb[s->position++];
-        off += take;
-    }
-}
-
-/* =============================================================================
- * Device: K12 kernel  (1 block = 1 message, blockIdx.x = job index)
- * ============================================================================= */
-
+/* Encode a non-negative integer in little-endian form with trailing length byte. */
 __device__ inline size_t k12_dev_length_encode(uint64_t x, uint8_t buf[9])
 {
     if (x == 0) { buf[0] = 0; return 1; }
@@ -303,6 +153,7 @@ __device__ inline size_t k12_dev_length_encode(uint64_t x, uint8_t buf[9])
     return static_cast<size_t>(n + 1);
 }
 
+/* Byte length of chunk idx within serialized input S of length S_len. */
 __device__ inline size_t k12_dev_chunk_len(size_t S_len, size_t idx)
 {
     const size_t start = idx * K12_GPU_CHUNK_SIZE;
@@ -312,6 +163,7 @@ __device__ inline size_t k12_dev_chunk_len(size_t S_len, size_t idx)
     return end - start;
 }
 
+/* Absorb bytes [S_off, S_off+len) from M || C || customization length encoding. */
 __device__ inline void k12_dev_absorb_stream_range(K12GpuTurboSponge* s,
                                                    size_t S_off,
                                                    size_t len,
@@ -343,6 +195,7 @@ __device__ inline void k12_dev_absorb_stream_range(K12GpuTurboSponge* s,
     }
 }
 
+/* Absorb one 8192-byte chunk of the serialized KangarooTwelve input. */
 __device__ inline void k12_dev_absorb_chunk(K12GpuTurboSponge* s,
                                             size_t chunk_idx,
                                             size_t S_len,
@@ -357,6 +210,7 @@ __device__ inline void k12_dev_absorb_chunk(K12GpuTurboSponge* s,
                                 M_len, M, C_len, C, c_enc);
 }
 
+/* Hash one batch job: short path (single sponge) or tree path (leaf CVs + root). */
 __global__ __launch_bounds__(K12_GPU_BLOCK_THREADS, K12_GPU_BLOCKS_PER_SM)
 void k12_gpu_hash_kernel(const uint8_t* d_message_data,
                          const size_t* d_message_offsets,

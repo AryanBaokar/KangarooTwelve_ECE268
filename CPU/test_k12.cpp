@@ -74,7 +74,7 @@ static uint8_t* make_pattern(size_t n)
 }
 
 /* -------------------------------------------------------------------------
- * Official test vectors — draft-irtf-cfrg-kangarootwelve-07, Section 3
+ * Official test vectors  -  draft-irtf-cfrg-kangarootwelve-07, Section 3
  * https://datatracker.ietf.org/doc/rfc9861/                       
  * All vectors use 32 output bytes unless noted.
  * ------------------------------------------------------------------------- */
